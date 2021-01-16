@@ -17,6 +17,8 @@ import chatty.util.settings.Setting;
 import chatty.util.settings.Settings;
 import java.awt.Color;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.logging.Logger;
@@ -201,6 +203,7 @@ public class SettingsManager {
         settings.addLong("lafVariant", 0);
         settings.addString("lafStyle", "regular");
         settings.addString("lafScroll", "default");
+        settings.addBoolean("lafNativeWindow", false);
         settings.addString("language", "");
         settings.addString("timezone", "");
         
@@ -230,12 +233,14 @@ public class SettingsManager {
         settings.addLong("mentions", 3);
         settings.addLong("mentionsInfo", 3);
         settings.addLong("markHoveredUser", chatty.gui.components.textpane.SettingConstants.USER_HOVER_HL_MENTIONS);
+        settings.addLong("mentionMessages", 0);
 
         // Badges/Emotes
         settings.addBoolean("emoticonsEnabled",true);
         settings.addLong("emoteMaxHeight", 0);
         settings.addLong("emoteScale", 100);
         settings.addLong("emoteScaleDialog", 100);
+        settings.addList("emoteHiddenSets", new ArrayList<>(), Setting.STRING);
         settings.addBoolean("closeEmoteDialogOnDoubleClick", false);
         settings.addBoolean("ffz", true);
         settings.addBoolean("ffzEvent", true);
@@ -286,11 +291,13 @@ public class SettingsManager {
         settings.addString("nickColorCorrection", "normal");
         settings.addLong("nickColorBackground", 1);
         settings.addList("colorPresets", new ArrayList<>(), Setting.LIST);
-        
+        settings.addBoolean("displayColoredNamesInUserlist", false);
+
         // Message Colors
         settings.addBoolean("msgColorsEnabled", false);
         settings.addList("msgColors", new LinkedList(), Setting.STRING);
         settings.addBoolean("msgColorsPrefer", false);
+        settings.addBoolean("msgColorsLinks", true);
         
         // Usercolors
         settings.addBoolean("customUsercolors", false);
@@ -340,6 +347,9 @@ public class SettingsManager {
         settings.addBoolean("reuseUserDialog", false);
         settings.addString("userDialogTimestamp", "[HH:mm:ss]");
         settings.addLong("clearUserMessages", 12);
+        settings.addMap("userNotes", new HashMap(), Setting.STRING);
+        settings.addMap("userNotesChat", new HashMap(), Setting.STRING);
+        settings.addLong("userDialogMessageLimit", 100);
 
         // History / Favorites
         settings.addMap("channelHistory",new TreeMap(), Setting.LONG);
@@ -352,6 +362,8 @@ public class SettingsManager {
         settings.addBoolean("saveChannelHistory", true);
         settings.addBoolean("historyClear", true);
         settings.addLong("favoritesSorting", 20);
+        
+        settings.addList("gameFavorites", new ArrayList(), Setting.STRING);
         
         //=======================
         // Channel Admin Features
@@ -396,6 +408,7 @@ public class SettingsManager {
         settings.addBoolean("splash", true);
         settings.addBoolean("hideStreamsOnMinimize", true);
         settings.addLong("inputFocus", 0);
+        settings.addList("icons", new ArrayList<>(), Setting.STRING);
         
         // Tray
         settings.addBoolean("closeToTray", false);
@@ -407,11 +420,14 @@ public class SettingsManager {
         settings.addMap("windows", new HashMap<>(), Setting.STRING);
         settings.addLong("restoreMode", WindowStateManager.RESTORE_ON_START);
         settings.addBoolean("restoreOnlyIfOnScreen", true);
+        settings.addLong("highlightDock", 0);
+        settings.addLong("ignoreDock", 0);
 
         // Popouts
         settings.addBoolean("popoutSaveAttributes", true);
-        settings.addBoolean("popoutCloseLastChannel", true);
+        settings.addBoolean("popoutCloseLastChannel", false);
         settings.addList("popoutAttributes", new ArrayList(), Setting.STRING);
+        settings.addString("popoutClose", "ask");
         
         // Titlebar
         settings.addBoolean("simpleTitle", false);
@@ -424,11 +440,18 @@ public class SettingsManager {
 
         // Tabs
         settings.addString("tabOrder", "normal");
+        settings.addString("tabsOpen", "active2");
         settings.addBoolean("tabsMwheelScrolling", false);
         settings.addBoolean("tabsMwheelScrollingAnywhere", true);
         settings.addString("tabsPlacement", "top");
         settings.addString("tabsLayout", "wrap");
-
+        settings.addLong("tabsLive", 16);
+        settings.addLong("tabsMessage", 4);
+        settings.addLong("tabsHighlight", 8);
+        settings.addLong("tabsStatus", 32);
+        settings.addLong("tabsActive", 128);
+        settings.addLong("tabsPopoutDrag", 2);
+        
         // Chat Window
         settings.addBoolean("chatScrollbarAlways", false);
         settings.addLong("userlistWidth", 120);
@@ -566,6 +589,7 @@ public class SettingsManager {
         settings.addList("ignoredUsers", new ArrayList(), Setting.STRING);
         settings.addList("ignoredUsersWhisper", new ArrayList(), Setting.STRING);
         settings.addBoolean("ignoredUsersHideInGUI", true);
+        settings.addList("ignoreBlacklist", new ArrayList(), Setting.STRING);
         
         // Filter
         settings.addList("filter", new ArrayList(), Setting.STRING);
@@ -576,7 +600,7 @@ public class SettingsManager {
         settings.addString("logMode", "always");
         settings.addBoolean("logMessage", true);
         settings.addString("logMessageTemplate", "$if(timestamp,$(timestamp) )<$(full-nick2)>$if(action,*) $(msg)");
-        settings.addBoolean("logMod", true);
+        settings.addBoolean("logMod", false);
         settings.addBoolean("logJoinPart", false);
         settings.addBoolean("logBan", true);
         settings.addBoolean("logDeleted", true);
@@ -589,6 +613,8 @@ public class SettingsManager {
         settings.addBoolean("logBits", true);
         settings.addList("logWhitelist",new ArrayList(), Setting.STRING);
         settings.addList("logBlacklist",new ArrayList(), Setting.STRING);
+        settings.addBoolean("logHighlighted2", false);
+        settings.addBoolean("logIgnored2", false);
         settings.addString("logPath", "");
         settings.addString("logSplit", "never");
         settings.addBoolean("logSubdirectories", false);
@@ -596,6 +622,7 @@ public class SettingsManager {
         settings.addBoolean("logLockFiles", true);
         
         // TAB Completion
+        settings.addBoolean("completionEnabled", true);
         settings.addMap("customCompletion", new HashMap(), Setting.STRING);
         settings.addLong("completionMaxItemsShown", 5);
         settings.addBoolean("completionShowPopup", true);
@@ -611,6 +638,9 @@ public class SettingsManager {
         settings.addString("completionEmotePrefix", ":");
         settings.addLong("completionMixed", 0);
         settings.addBoolean("completionSpace", false);
+        
+        // Replying
+        settings.addBoolean("mentionReplyRestricted", false);
 
         // Stream Chat
         settings.addLong("streamChatMessageTimeout", -1);
@@ -667,6 +697,9 @@ public class SettingsManager {
         settings.addList("autoUnhostStreams", new ArrayList(), Setting.STRING);
         
         settings.addMap("rewards", new HashMap(), Setting.STRING);
+        
+        settings.addBoolean("pronouns", false);
+        settings.addBoolean("pronounsChat", false);
     }
     
     private boolean loadSuccess;
@@ -916,6 +949,11 @@ public class SettingsManager {
 //            result.append(settings.settingValueToString(setting));
 //        }
 //        LOGGER.info(result.toString());
+    }
+    
+    public boolean checkSettingsDir() {
+        Path path = Paths.get(Chatty.getUserDataDirectory());
+        return Files.isDirectory(path);
     }
     
     private void addDefaultHotkey(String version, String id, String hotkey) {
