@@ -25,6 +25,7 @@ import chatty.util.DateTime;
 import chatty.util.Debugging;
 import chatty.util.MiscUtil;
 import chatty.util.Pair;
+import chatty.util.RepeatMsgHelper;
 import chatty.util.ReplyManager;
 import chatty.util.RingBuffer;
 import chatty.util.StringUtil;
@@ -140,9 +141,10 @@ public class ChannelTextPane extends JTextPane implements LinkListener, Emoticon
         URL_DELETED, DELETED_LINE, EMOTICON, IS_APPENDED_INFO, INFO_TEXT, BANS,
         BAN_MESSAGE, ID, ID_AUTOMOD, AUTOMOD_ACTION, USERICON, IMAGE_ID, ANIMATED,
         APPENDED_INFO_UPDATED, MENTION, USERICON_INFO, GENERAL_LINK,
+        REPEAT_MESSAGE_COUNT,
         
-        HIGHLIGHT_WORD, HIGHLIGHT_LINE, EVEN, PARAGRAPH_SPACING,
-        CUSTOM_BACKGROUND, CUSTOM_FOREGROUND,
+        HIGHLIGHT_WORD, HIGHLIGHT_LINE, HIGHLIGHT_SOURCE, EVEN, PARAGRAPH_SPACING,
+        CUSTOM_BACKGROUND, CUSTOM_FOREGROUND, CUSTOM_COLOR_SOURCE,
         
         IS_REPLACEMENT, REPLACEMENT_FOR, REPLACED_WITH, COMMAND, ACTION_BY,
         ACTION_REASON,
@@ -186,21 +188,31 @@ public class ChannelTextPane extends JTextPane implements LinkListener, Emoticon
     
     private final javax.swing.Timer updateTimer;
     
-    private final boolean isStreamChat;
-    
-    public ChannelTextPane(MainGui main, StyleServer styleServer) {
-        this(main, styleServer, false, true);
+    public enum Type {
+        REGULAR, STREAM_CHAT, HIGHLIGHTS, IGNORED
     }
     
-    public ChannelTextPane(MainGui main, StyleServer styleServer, boolean isStreamChat, boolean startAtBottom) {
+    private final Type type;
+    
+    public ChannelTextPane(MainGui main, StyleServer styleServer) {
+        this(main, styleServer, Type.REGULAR, true);
+    }
+    
+    public ChannelTextPane(MainGui main, StyleServer styleServer, Type type) {
+        this(main, styleServer, type, true);
+    }
+
+    public ChannelTextPane(MainGui main, StyleServer styleServer, Type type, boolean startAtBottom) {
         getAccessibleContext().setAccessibleName("Chat Output");
         getAccessibleContext().setAccessibleDescription("");
         lineSelection = new LineSelection(main.getUserListener());
         this.styleServer = styleServer;
         this.main = main;
+        this.type = type;
         this.setBackground(BACKGROUND_COLOR);
         this.addMouseListener(linkController);
         this.addMouseMotionListener(linkController);
+        linkController.setType(type);
         linkController.addUserListener(main.getUserListener());
         linkController.addUserListener(lineSelection);
         linkController.setUserHoverListener(user -> setHoveredUser(user));
@@ -222,7 +234,7 @@ public class ChannelTextPane extends JTextPane implements LinkListener, Emoticon
 
             @Override
             public void actionPerformed(ActionEvent e) {
-                if (isStreamChat) {
+                if (type == Type.STREAM_CHAT) {
                     removeOldLines();
                 }
                 removeAbandonedModLogInfo();
@@ -232,7 +244,6 @@ public class ChannelTextPane extends JTextPane implements LinkListener, Emoticon
         updateTimer.start();
         
         FixSelection.install(this);
-        this.isStreamChat = isStreamChat;
         
         if (Chatty.DEBUG) {
             addCaretListener(new CaretListener() {
@@ -572,12 +583,23 @@ public class ChannelTextPane extends JTextPane implements LinkListener, Emoticon
                 message.replaceMatches, message.replacement, message.tags);
         
         if (message.highlighted) {
-            setLineHighlighted(doc.getLength());
+            setLineHighlighted(doc.getLength(), message.highlightSource);
         }
-        if (message.backgroundColor != null) {
-            setCustomBackgroundColor(doc.getLength(), message.backgroundColor);
+        else if (type == Type.IGNORED) {
+            // For ignored messages, the "highlight" refers to what was ignored
+            setLineHighlightSource(doc.getLength(), message.highlightSource);
+        }
+        if (message.backgroundColor != null || message.color != null) {
+            setCustomColor(doc.getLength(), message.backgroundColor, message.colorSource);
         }
         finishLine();
+        
+        int repeatMsg = RepeatMsgHelper.getRepeatMsg(message.tags);
+        if (repeatMsg > 1) {
+            changeInfo(getLastLine(doc), (attributes) -> {
+                attributes.addAttribute(Attribute.REPEAT_MESSAGE_COUNT, repeatMsg);
+            });
+        }
         
         lastUsers.add(new MentionCheck(user));
     }
@@ -632,10 +654,13 @@ public class ChannelTextPane extends JTextPane implements LinkListener, Emoticon
         //-----------------
         if (!message.isHidden()) {
             if (message.highlighted) {
-                setLineHighlighted(doc.getLength());
+                setLineHighlighted(doc.getLength(), message.highlightSource);
             }
-            if (message.bgColor != null) {
-                setCustomBackgroundColor(doc.getLength(), message.bgColor);
+            else if (type == Type.IGNORED) {
+                setLineHighlightSource(doc.getLength(), message.highlightSource);
+            }
+            if (message.bgColor != null || message.color != null) {
+                setCustomColor(doc.getLength(), message.bgColor, message.colorSource);
             }
         }
     }
@@ -906,6 +931,11 @@ public class ChannelTextPane extends JTextPane implements LinkListener, Emoticon
             // Make text based on current attributes
             //---------------------------------------
             String text = "";
+            Integer repeatMsgCount = (Integer)attributes.getAttribute(Attribute.REPEAT_MESSAGE_COUNT);
+            if (repeatMsgCount != null && repeatMsgCount > 1) {
+                text += String.format("(x%d)", repeatMsgCount);
+            }
+            
             Integer banCount = (Integer)attributes.getAttribute(Attribute.BAN_MESSAGE_COUNT);
             if (banCount != null && banCount > 1) {
                 text += String.format("(%d)", banCount);
@@ -1336,15 +1366,27 @@ public class ChannelTextPane extends JTextPane implements LinkListener, Emoticon
         doc.setParagraphAttributes(offset, 1, styles.variableLineAttributes(even, updateTimestamp), false);
     }
     
-    private void setLineHighlighted(int offset) {
+    private void setLineHighlighted(int offset, Object source) {
         SimpleAttributeSet attr = new SimpleAttributeSet();
         attr.addAttribute(Attribute.HIGHLIGHT_LINE, true);
+        attr.addAttribute(Attribute.HIGHLIGHT_SOURCE, source);
         doc.setParagraphAttributes(offset, 1, attr, false);
     }
     
-    private void setCustomBackgroundColor(int offset, Color color) {
+    private void setLineHighlightSource(int offset, Object source) {
+        if (source != null) {
+            SimpleAttributeSet attr = new SimpleAttributeSet();
+            attr.addAttribute(Attribute.HIGHLIGHT_SOURCE, source);
+            doc.setParagraphAttributes(offset, 1, attr, false);
+        }
+    }
+    
+    private void setCustomColor(int offset, Color backgroundColor, Object source) {
         SimpleAttributeSet attr = new SimpleAttributeSet();
-        attr.addAttribute(Attribute.CUSTOM_BACKGROUND, color);
+        if (backgroundColor != null) {
+            attr.addAttribute(Attribute.CUSTOM_BACKGROUND, backgroundColor);
+        }
+        attr.addAttribute(Attribute.CUSTOM_COLOR_SOURCE, source);
         doc.setParagraphAttributes(offset, 1, attr, false);
     }
     
@@ -1991,7 +2033,7 @@ public class ChannelTextPane extends JTextPane implements LinkListener, Emoticon
      */
     private void printUserIcons(User user, boolean pointsHl) {
         boolean botBadgeEnabled = styles.isEnabled(Setting.BOT_BADGE_ENABLED);
-        java.util.List<Usericon> badges = user.getBadges(botBadgeEnabled, pointsHl, isStreamChat);
+        java.util.List<Usericon> badges = user.getBadges(botBadgeEnabled, pointsHl, type == Type.STREAM_CHAT);
         if (badges != null) {
             for (Usericon badge : badges) {
                 if (badge.image != null && !badge.removeBadge) {

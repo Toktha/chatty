@@ -26,7 +26,7 @@ public class HighlightBlacklist extends JDialog {
         super(d);
 
         setDefaultCloseOperation(HIDE_ON_CLOSE);
-        setTitle(type+" Blacklist");
+        setTitle(Language.getString("settings.blacklist."+type+".title"));
         setLayout(new GridBagLayout());
 
         GridBagConstraints gbc;
@@ -41,7 +41,7 @@ public class HighlightBlacklist extends JDialog {
         setting = d.addListSetting(settingName, "Blacklist", 100, 250, false, true);
         setting.setInfo(getMatchingHelp("highlightBlacklist"));
         setting.setDataFormatter(input -> input.trim());
-        HighlighterTester tester = new HighlighterTester(d, true, type+":");
+        HighlighterTester tester = new HighlighterTester(d, true, type);
         tester.setEditingBlacklistItem(true);
         tester.setLinkLabelListener(d.getLinkLabelListener());
         setting.setInfoLinkLabelListener(d.getLinkLabelListener());

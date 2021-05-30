@@ -232,6 +232,7 @@ public class TwitchClient {
         if (settings.getBoolean("abAutoImport")) {
             addressbook.enableAutoImport();
         }
+        Helper.addressbook = addressbook;
         
         initDxSettings();
         
@@ -264,7 +265,6 @@ public class TwitchClient {
         usercolorManager = new UsercolorManager(settings);
         usericonManager = new UsericonManager(settings);
         customCommands = new CustomCommands(settings, api, this);
-        customCommands.loadFromSettings();
         botNameManager = new BotNameManager(settings);
         settings.addSettingsListener(new SettingSaveListener());
 
@@ -415,6 +415,7 @@ public class TwitchClient {
         
         addCommands();
         g.addGuiCommands();
+        updateCustomCommands();
         
         // Request some stuff
         api.getEmotesBySets("0");
@@ -479,6 +480,10 @@ public class TwitchClient {
         } catch (SecurityException ex) {
             LOGGER.warning("Error setting drawing settings: "+ex.getLocalizedMessage());
         }
+    }
+    
+    public void updateCustomCommands() {
+        customCommands.update(commands);
     }
     
     /**
@@ -833,7 +838,9 @@ public class TwitchClient {
     }
     
     private void sendMessage(String channel, String text) {
-        sendMessage(channel, text, false);
+        if (c.onChannel(channel, true)) {
+            sendMessage(channel, text, false);
+        }
     }
     
     /**
@@ -886,6 +893,9 @@ public class TwitchClient {
                             // If changed to parent msg-id, atMsg will be null
                             sendReply(channel, actualMsg, username, result.atMsgId, result.atMsg);
                         }
+                        else {
+                            g.insert(text, false);
+                        }
                         return true;
                     }
                 }
@@ -930,6 +940,10 @@ public class TwitchClient {
      */
     public boolean isChannelOpen(String channel) {
         return c.isChannelOpen(channel);
+    }
+    
+    public boolean isChannelJoined(String channel) {
+        return c.onChannel(channel, false);
     }
     
     public boolean isUserlistLoaded(String channel) {
@@ -1044,6 +1058,14 @@ public class TwitchClient {
         });
         commands.add("me", p -> {
             commandActionMessage(p.getChannel(), p.getArgs());
+        });
+        commands.add("say", p -> {
+            if (p.hasArgs()) {
+                sendMessage(p.getChannel(), p.getArgs());
+            }
+            else {
+                g.printLine(p.getRoom(), "Usage: /say <message>");
+            }
         });
         commands.add("msg", p -> {
             commandCustomMessage(p.getArgs());
@@ -1345,11 +1367,13 @@ public class TwitchClient {
                 g.printSystem("No valid commands");
             }
             for (String chainedCommand : commands) {
-                textInput(p.getRoom(), chainedCommand, p.getParameters());
+                // Copy parameters so changing args in commandInput() doesn't
+                // affect the following commands
+                textInput(p.getRoom(), chainedCommand, p.getParameters().copy());
             }
         });
     }
-        
+    
     /**
      * Executes the command with the given name, which can be a built-in or
      * Custom Command.
@@ -1634,6 +1658,8 @@ public class TwitchClient {
             args.add("tduva");
             ModeratorActionData data = new ModeratorActionData("", "", "", room.getStream(), "denied_automod_message", args, "asdas", "TEST");
             g.printModerationAction(data, false);
+        } else if (command.equals("simulatepubsub")) {
+            pubsub.simulate(parameter);
         } else if (command.equals("repeat")) {
             String[] split = parameter.split(" ", 2);
             int count = Integer.parseInt(split[0]);
@@ -1716,14 +1742,17 @@ public class TwitchClient {
             g.printLine("Custom command: Not on a channel");
             return;
         }
-        String result = customCommands.command(command, parameters, room);
-        if (result == null) {
-            g.printLine("Custom command: Insufficient parameters/data");
-        } else if (result.isEmpty()) {
-            g.printLine("Custom command: No action specified");
-        } else {
-            textInput(room, result, parameters);
-        }
+        customCommands.command(command, parameters, room, result -> {
+            if (result == null) {
+                g.printLine("Custom command: Insufficient parameters/data");
+            }
+            else if (result.isEmpty()) {
+                g.printLine("Custom command: No action specified");
+            }
+            else {
+                textInput(room, result, parameters);
+            }
+        });
     }
     
     public void customCommandLaunch(String commandAndParameters) {
@@ -1754,28 +1783,36 @@ public class TwitchClient {
             g.printLine("Custom command not found: "+command);
             return;
         }
-        String result = customCommands.command(command, parameters, room);
-        if (result == null) {
-            g.printLine("Custom command '"+command+"': Insufficient parameters/data");
-        } else if (result.isEmpty()) {
-            // This shouldn't actually happen if edited through the settings,
-            // which should trim() out whitespace, so that the command won't
-            // have a result if it's empty and thus won't be added as a command.
-            // Although it can also happen if the command just contains a \
-            // (which is interpreted as an escape character).
-            g.printLine("Custom command '"+command+"': No action specified");
-        } else {
-            // Check what command is called in the result of this command
-            String[] resultSplit = result.split(" ", 2);
-            String resultCommand = resultSplit[0];
-            if (resultCommand.startsWith("/")
-                    && customCommands.containsCommand(resultCommand.substring(1), room)) {
-                g.printLine("Custom command '"+command+"': Calling another custom "
-                        + "command ('"+resultCommand.substring(1)+"') is not allowed");
-            } else {
-                textInput(room, result, parameters);
-            }
+        if (CustomCommands.getCustomCommandCount(parameters) > 2) {
+            g.printLine(String.format("Stopped executing '%s' (too many nested Custom Commands)", command));
+            return;
         }
+        customCommands.command(command, parameters, room, result -> {
+            if (result == null) {
+                g.printLine("Custom command '" + command + "': Insufficient parameters/data");
+            }
+            else if (result.isEmpty()) {
+                // This shouldn't actually happen if edited through the settings,
+                // which should trim() out whitespace, so that the command won't
+                // have a result if it's empty and thus won't be added as a command.
+                // Although it can also happen if the command just contains a \
+                // (which is interpreted as an escape character).
+                g.printLine("Custom command '" + command + "': No action specified");
+            }
+            else {
+                // Check what command is called in the result of this command
+                String[] resultSplit = result.split(" ", 2);
+                String resultCommand = resultSplit[0];
+                if (resultCommand.startsWith("/")
+                        && customCommands.containsCommand(resultCommand.substring(1), room)) {
+                    g.printLine("Custom command '" + command + "': Calling another custom "
+                            + "command ('" + resultCommand.substring(1) + "') is not allowed");
+                }
+                else {
+                    textInput(room, result, parameters);
+                }
+            }
+        });
     }
     
     /**
@@ -2244,7 +2281,9 @@ public class TwitchClient {
             if (message.data != null) {
                 if (message.data instanceof ModeratorActionData) {
                     ModeratorActionData data = (ModeratorActionData) message.data;
-                    if (data.stream != null) {
+                    // A regular mod action that doesn't contain a mod action should be ignored
+                    boolean empty = data.type == ModeratorActionData.Type.OTHER && data.moderation_action.isEmpty() && data.args.isEmpty();
+                    if (data.stream != null && !empty) {
                         String channel = Helper.toChannel(data.stream);
                         g.printModerationAction(data, data.created_by.equals(c.getUsername()));
                         chatLog.modAction(data);
@@ -2427,9 +2466,9 @@ public class TwitchClient {
         }
 
         @Override
-        public void autoModResult(String result, String msgId) {
-            g.autoModRequestResult(result, msgId);
-            autoModCommandHelper.requestResult(result, msgId);
+        public void autoModResult(TwitchApi.AutoModAction action, String msgId, TwitchApi.AutoModActionResult result) {
+            g.autoModRequestResult(action, msgId, result);
+            autoModCommandHelper.requestResult(action, msgId, result);
         }
 
         @Override
@@ -2980,6 +3019,11 @@ public class TwitchClient {
         public void onInfo(String message) {
             g.printLine(message);
         }
+        
+        @Override
+        public void onJoinScheduled(String channel) {
+            g.joinScheduled(channel);
+        }
 
         @Override
         public void onJoinAttempt(Room room) {
@@ -3097,9 +3141,11 @@ public class TwitchClient {
             if (error == TwitchConnection.JoinError.NOT_REGISTERED) {
                 String validChannels = Helper.buildStreamsString(toJoin);
                 if (c.isOffline()) {
-                    g.openConnectDialog(validChannels);
+                    prepareConnectionWithChannel(validChannels);
                 }
-                g.printLine(Language.getString("chat.joinError.notConnected", validChannels));
+                else {
+                    g.printLine(Language.getString("chat.joinError.notConnected", validChannels));
+                }
             } else if (error == TwitchConnection.JoinError.ALREADY_JOINED) {
                 if (toJoin.size() == 1) {
                     g.switchToChannel(errorChannel);
