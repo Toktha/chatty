@@ -157,7 +157,7 @@ public class MainGui extends JFrame implements Runnable {
     private final Highlighter highlighter = new Highlighter("highlight");
     private final Highlighter ignoreList = new Highlighter("ignore");
     private final Highlighter filter = new Highlighter("filter");
-    private final RepeatMsgHelper repeatMsg;
+    public final RepeatMsgHelper repeatMsg;
     private final MsgColorManager msgColorManager;
     private StyleManager styleManager;
     private TrayIconManager trayIcon;
@@ -1003,6 +1003,7 @@ public class MainGui extends JFrame implements Runnable {
         streamChat.setMessageTimeout((int)client.settings.getLong("streamChatMessageTimeout"));
         
         emotesDialog.setEmoteScale((int)client.settings.getLong("emoteScaleDialog"));
+        emotesDialog.setEmoteImageType(Emoticon.makeImageType(client.settings.getBoolean("animatedEmotes")));
         emotesDialog.setHiddenEmotesets(client.settings.getList("emoteHiddenSets"));
         emotesDialog.setCloseOnDoubleClick(client.settings.getBoolean("closeEmoteDialogOnDoubleClick"));
         
@@ -1244,10 +1245,10 @@ public class MainGui extends JFrame implements Runnable {
         }
     }
     
-    private void loadLayout(String layoutName) {
+    private void loadLayout(String layoutName, int options) {
         DockLayout layout = DockLayout.fromList((List) client.settings.mapGet("layouts", layoutName));
         if (layout != null) {
-            channels.changeLayout(layout);
+            channels.changeLayout(layout, options);
         }
         else {
             printSystem("Layout not found: "+layoutName);
@@ -1258,7 +1259,7 @@ public class MainGui extends JFrame implements Runnable {
         if (!StringUtil.isNullOrEmpty(layoutName)) {
             boolean save = true;
             if (ask && client.settings.mapGet("layouts", layoutName) != null) {
-                int result = JOptionPane.showConfirmDialog(rootPane, "Overwrite saved layout "+layoutName+" with current layout?", "Save layout", JOptionPane.YES_NO_OPTION);
+                int result = JOptionPane.showConfirmDialog(rootPane, "Overwrite layout "+layoutName+"?", "Save layout", JOptionPane.YES_NO_OPTION);
                 save = result == 0;
             }
             if (save) {
@@ -1682,7 +1683,7 @@ public class MainGui extends JFrame implements Runnable {
                 addLayout(null);
             } else if (cmd.startsWith("layouts.load.")) {
                 String layoutName = cmd.substring("layouts.load.".length());
-                loadLayout(layoutName);
+                loadLayout(layoutName, -1);
             } else if (cmd.startsWith("layouts.save.")) {
                 String layoutName = cmd.substring("layouts.save.".length());
                 saveLayout(layoutName, true);
@@ -2196,12 +2197,22 @@ public class MainGui extends JFrame implements Runnable {
                     printLine("Can't host more than one channel.");
                 }
             } else if (cmd.equals("follow")) {
-                for (String stream : streams) {
-                    client.commandFollow(null, stream);
+                if (JOptionPane.showConfirmDialog(getActiveWindow(),
+                        "Follow " + StringUtil.join(streams, ", ") + "?",
+                        Language.getString("channelCm.follow"),
+                        JOptionPane.YES_NO_OPTION) == 0) {
+                    for (String stream : streams) {
+                        client.commandFollow(null, stream);
+                    }
                 }
             } else if (cmd.equals("unfollow")) {
-                for (String stream : streams) {
-                    client.commandUnfollow(null, stream);
+                if (JOptionPane.showConfirmDialog(getActiveWindow(),
+                        "Unfollow " + StringUtil.join(streams, ", ") + "?",
+                        Language.getString("channelCm.unfollow"),
+                        JOptionPane.YES_NO_OPTION) == 0) {
+                    for (String stream : streams) {
+                        client.commandUnfollow(null, stream);
+                    }
                 }
             } else if (cmd.equals("copy") && !streams.isEmpty()) {
                 MiscUtil.copyToClipboard(StringUtil.join(streams, ", "));
@@ -2619,23 +2630,47 @@ public class MainGui extends JFrame implements Runnable {
         });
         client.commands.addEdt("layouts", p -> {
             if (p.hasArgs()) {
-                String[] split = p.getArgs().split(" ", 2);
-                if (split.length < 2) {
+                String args = p.getArgs().trim();
+                String command = null;
+                String layoutName = null;
+                int options = -1;
+                String[] split = args.split(" ", 2);
+                if (split.length == 2) {
+                    command = split[0];
+                    if (split[1].startsWith("-") && command.equals("load")) {
+                        String[] optionsSplit = split[1].split(" ");
+                        if (optionsSplit.length == 2) {
+                            if (!optionsSplit[0].equals("--")) {
+                                options = Channels.makeLoadLayoutOptions(
+                                        optionsSplit[0].contains("c"),
+                                        optionsSplit[0].contains("l"),
+                                        optionsSplit[0].contains("m"));
+                            }
+                            layoutName = optionsSplit[1];
+                        }
+                    }
+                    else {
+                        layoutName = split[1];
+                    }
+                }
+                if (command == null || layoutName == null) {
                     printSystem("Invalid parameters.");
                 }
-                switch (split[0]) {
-                    case "add":
-                        addLayout(split[1]);
-                        break;
-                    case "save":
-                        saveLayout(split[1], false);
-                        break;
-                    case "load":
-                        loadLayout(split[1]);
-                        break;
-                    case "remove":
-                        removeLayout(split[1], false);
-                        break;
+                else {
+                    switch (command) {
+                        case "add":
+                            addLayout(layoutName);
+                            break;
+                        case "save":
+                            saveLayout(layoutName, false);
+                            break;
+                        case "load":
+                            loadLayout(layoutName, options);
+                            break;
+                        case "remove":
+                            removeLayout(layoutName, false);
+                            break;
+                    }
                 }
             }
         });
@@ -3161,6 +3196,13 @@ public class MainGui extends JFrame implements Runnable {
                 
                 // Adds a tag if repeated msg is detected according to settings
                 tags = repeatMsg.check(user, localUser, text, tags);
+                if (Chatty.DEBUG && !tags.hasValue("id")) {
+                    /**
+                     * Could be weird to add for non-testing since the message
+                     * can't actually be deleted or whatever.
+                     */
+                    tags = MsgTags.addTag(tags, "id", String.valueOf(User.MSG_ID++));
+                }
                 
                 boolean isOwnMessage = isOwnUsername(user.getName()) || (whisper && action);
                 boolean ignoredUser = (userIgnored(user, whisper) && !isOwnMessage);
@@ -4486,6 +4528,9 @@ public class MainGui extends JFrame implements Runnable {
             else {
                 result = "Login verified and ready to connect.";
             }
+            if (!Chatty.CLIENT_ID.equals(tokenInfo.clientId)) {
+                result += " ClientID does not match, please generate token through Chatty.";
+            }
         }
         if (changedTokenResponse) {
             printLine(result);
@@ -4794,6 +4839,8 @@ public class MainGui extends JFrame implements Runnable {
                     tokenDialog.setForeignToken(bool);
                 } else if (setting.equals("completionEnabled")) {
                     channels.setCompletionEnabled(bool);
+                } else if (setting.equals("animatedEmotes")) {
+                    emotesDialog.setEmoteImageType(Emoticon.makeImageType(bool));
                 }
                 if (setting.startsWith("title") || setting.equals("tabsChanTitles")) {
                     updateState(true);
